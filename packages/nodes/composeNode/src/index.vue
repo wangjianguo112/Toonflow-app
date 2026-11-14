@@ -245,20 +245,22 @@ nodeTools.register({
 
 nodeTools.register({
   name: "setComposeOrder",
-  description: "调整成片拼接顺序，keys 按 `${来源节点ID}:${来源端口ID}` 的顺序列出全部片段",
+  description: "调整成片拼接顺序；keys 为各片段的引用键，与节点 referenceOrder 相同，格式为 encodeURIComponent(JSON.stringify([来源节点ID, 来源端口ID]))，按目标顺序列出当前全部片段",
   parameters: z.strictObject({
     keys: z.array(z.string().min(1).max(512)).min(1).max(200),
   }),
   async execute({ keys }, { signal }) {
     signal?.throwIfAborted();
-    const known = new Map(clips.value.map(clip => [clip.key, clip]));
-    const ordered = keys.flatMap(key => {
-      const clip = known.get(key);
-      return clip ? [clip] : [];
+    const items = refList.value;
+    const byKey = new Map(items.map(item => [referenceKey(item), item]));
+    const reordered = keys.flatMap(key => {
+      const item = byKey.get(key);
+      return item ? [item] : [];
     });
-    if (ordered.length !== clips.value.length) throw new Error("keys 必须覆盖当前全部片段");
-    refList.value = refList.value.filter(item => ordered.some(clip => clip.key === referenceKey(item)));
-    return { order: ordered.map((clip, index) => ({ index: index + 1, name: clip.name })) };
+    if (reordered.length !== items.length) throw new Error("keys 必须覆盖当前全部片段");
+    refList.value = reordered;
+    const names = new Map(clips.value.map(clip => [clip.key, clip.name]));
+    return { order: reordered.map((item, index) => ({ index: index + 1, name: names.get(referenceKey(item)) })) };
   },
 });
 </script>
