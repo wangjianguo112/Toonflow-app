@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@toonflow/file": "workspace:*",
+    "@toonflow/ffmpeg": "workspace:*",
     "@toonflow/server": "workspace:*",
     "@toonflow/startup": "workspace:*",
     "@toonflow/i18n": "workspace:*",

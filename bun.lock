@@ -16,6 +16,7 @@
     "apps/desktop": {
       "name": "@toonflow/desktop",
       "dependencies": {
+        "@toonflow/ffmpeg": "workspace:*",
         "@toonflow/file": "workspace:*",
         "@toonflow/i18n": "workspace:*",
         "@toonflow/server": "workspace:*",
