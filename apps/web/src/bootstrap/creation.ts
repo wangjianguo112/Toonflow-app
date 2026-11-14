@@ -1,11 +1,10 @@
 import { createApp, watch, type App } from "vue";
 import { createPinia } from "pinia";
 import { createPersistedState } from "pinia-plugin-persistedstate";
-import type { UserSession } from "@toonflow/multi-tenant-user-web/types";
 import { actualPlatform } from "@/lib/platform";
 
-export async function createCreationApp(session: UserSession): Promise<App<Element>> {
-  // ACT: 创作端的模块会注册设备轮询和 MCP 等能力；确认身份后才加载，登录页不接触全局设置。
+export async function createCreationApp(): Promise<App<Element>> {
+  // ACT: 创作端的模块会注册设备轮询和 MCP 等能力；设置加载完成后再挂载。
   const [
     { default: appRoot }, { default: router }, { loadSettings, settingsStorage, multiTenantEnabled }, { registerLanguage },
     { registerAnonymousData }, { registerDownloads }, { registerDesktopProtocol }, { registerDesktopAutoUpdate },
@@ -19,10 +18,10 @@ export async function createCreationApp(session: UserSession): Promise<App<Eleme
   app.use(createPinia().use(createPersistedState({ storage: settingsStorage })));
   app.use(router);
   await router.isReady();
-  if (session.user?.role !== "user") app.onUnmount(registerAnonymousData());
+  app.onUnmount(registerAnonymousData());
   app.onUnmount(registerDownloads());
-  if (!session.publicWeb) app.onUnmount(watch(multiTenantEnabled, enabled => { if (enabled) window.location.reload(); }));
-  if (actualPlatform.isLocalDesktop && !session.publicWeb) {
+  app.onUnmount(watch(multiTenantEnabled, enabled => { if (enabled) window.location.reload(); }));
+  if (actualPlatform.isLocalDesktop) {
     app.onUnmount(registerDesktopProtocol());
     app.onUnmount(registerDesktopAutoUpdate());
   }

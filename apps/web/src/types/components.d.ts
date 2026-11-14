@@ -12,8 +12,6 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     About: typeof import('./../components/settings/panels/about/index.vue')['default']
-    Account: typeof import('./../components/settings/panels/account/index.vue')['default']
-    AccountChart: typeof import('./../components/settings/panels/account/accountChart.vue')['default']
     Agent: typeof import('./../components/agent/index.vue')['default']
     AttachmentList: typeof import('./../components/agent/attachmentList.vue')['default']
     AttachmentPreview: typeof import('./../components/agent/attachmentPreview.vue')['default']
@@ -22,7 +20,6 @@ declare module 'vue' {
     Conversation: typeof import('./../components/agent/conversation.vue')['default']
     DesktopQuit: typeof import('./../components/desktopQuit.vue')['default']
     Developer: typeof import('./../components/settings/panels/developer/index.vue')['default']
-    DevelopmentNotice: typeof import('./../components/settings/panels/multiTenant/developmentNotice.vue')['default']
     DeviceLink: typeof import('./../components/settings/panels/deviceLink/index.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAutoResizer: typeof import('element-plus/es')['ElAutoResizer']
@@ -118,9 +115,7 @@ declare module 'vue' {
     MessageList: typeof import('./../components/agent/conversation/messageList.vue')['default']
     MessageMarkdown: typeof import('./../components/messageMarkdown.vue')['default']
     MobileConnect: typeof import('./../components/mobileConnect.vue')['default']
-    ModelCatalog: typeof import('./../components/settings/panels/account/modelCatalog.vue')['default']
     ModelPopover: typeof import('./../components/modelPopover.vue')['default']
-    MultiTenant: typeof import('./../components/settings/panels/multiTenant/index.vue')['default']
     Network: typeof import('./../components/settings/panels/network/index.vue')['default']
     NodeMenuSettings: typeof import('./../components/settings/panels/general/nodeMenuSettings.vue')['default']
     NodeToolsDialog: typeof import('./../components/agent/nodeToolsDialog.vue')['default']
@@ -133,16 +128,10 @@ declare module 'vue' {
     Settings: typeof import('./../components/settings/index.vue')['default']
     SingleAgentDialog: typeof import('./../components/singleAgentDialog.vue')['default']
     SkillMenu: typeof import('./../components/agent/skillMenu.vue')['default']
-    SmsCodeButton: typeof import('./../components/settings/panels/account/smsCodeButton.vue')['default']
-    SubAccounts: typeof import('./../components/settings/panels/account/subAccounts.vue')['default']
-    TaskRecords: typeof import('./../components/settings/panels/account/taskRecords.vue')['default']
     ToolMessage: typeof import('./../components/agent/toolMessage.vue')['default']
-    ToonflowProviderCard: typeof import('./../components/settings/toonflowProviderCard.vue')['default']
     Ui: typeof import('./../components/settings/panels/general/ui.vue')['default']
     UpdateBox: typeof import('./../components/updateBox.vue')['default']
     VideoPlayer: typeof import('./../components/videoPlayer.vue')['default']
-    Wallet: typeof import('./../components/settings/panels/account/wallet.vue')['default']
-    WalletBonus: typeof import('./../components/settings/panels/account/walletBonus.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

@@ -20,17 +20,9 @@
       </div>
       <div v-else class="welcomeContent">
         <h1 id="welcomeTitle">快速开始</h1>
-        <p class="description">登录 Toonflow 即可免配置快速开始，直接开启创作。</p>
-        <accountPanel v-if="!loggedIn" class="accountContent" @loggedIn="startWithAccount" />
-        <el-button v-else class="startButton" type="primary" :loading="saving" @click="completeSetup">开始使用</el-button>
+        <p class="description">配置第三方模型后即可开始创作，也可以稍后在设置中配置。</p>
+        <el-button class="startButton" type="primary" :loading="saving" @click="view = 'custom'">配置第三方模型</el-button>
         <div class="secondaryActions">
-          <template v-if="!multiTenantEnabled">
-            <el-button class="secondaryButton" round :disabled="saving" @click="view = 'custom'">
-              <icon-key class="buttonIcon" />
-              配置第三方模型
-            </el-button>
-            <span class="separator">或</span>
-          </template>
           <el-button class="secondaryButton" round :loading="saving" @click="completeSetup">稍后配置</el-button>
         </div>
       </div>
@@ -56,7 +48,7 @@ import { defineAsyncComponent, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { IconArrowLeft, IconDevices } from "@tabler/icons-vue";
-import { customProviders, multiTenantEnabled, toonflowAccountToken } from "@/stores/settings";
+import { customProviders, multiTenantEnabled } from "@/stores/settings";
 import { useHelloStore } from "@/stores/hello";
 import anonymousData from "@/lib/anonymousData";
 import logoSvg from "@toonflow/assets/logo.svg?raw";
@@ -64,27 +56,20 @@ import bg from "./bg.vue";
 import languageSelect from "@/components/languageSelect.vue";
 import { mobileConnectionLabel } from "@/lib/mobile";
 
-const accountPanel = defineAsyncComponent(() => import("@/components/settings/panels/account/index.vue"));
 const languageModel = defineAsyncComponent(() => import("@/components/settings/panels/languageModel/index.vue"));
 const mobileConnect = defineAsyncComponent(() => import("@/components/mobileConnect.vue"));
 const mobileConnectVisible = ref(false);
 const view = ref<"welcome" | "custom">("welcome");
-const loggedIn = ref(!!toonflowAccountToken.value);
 const saving = ref(false);
 const router = useRouter();
 const hello = useHelloStore();
-
-function startWithAccount() {
-  loggedIn.value = true;
-  void completeSetup();
-}
 
 async function completeSetup() {
   if (saving.value) return;
   saving.value = true;
   try {
     await hello.complete();
-    anonymousData.track(view.value === "custom" || toonflowAccountToken.value ? "onboarding.complete" : "onboarding.skip");
+    anonymousData.track(view.value === "custom" ? "onboarding.complete" : "onboarding.skip");
     await router.replace("/home");
   } catch {
     ElMessage.error("保存引导状态失败，请重试");
