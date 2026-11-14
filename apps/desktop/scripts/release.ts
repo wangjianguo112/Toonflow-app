@@ -4,6 +4,7 @@ import { file } from "@toonflow/file/bun";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import desktopConfig, { desktopTarget } from "../../../electrobun.config";
+import { installFfmpeg } from "@toonflow/ffmpeg";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -79,6 +80,27 @@ if (!initial) {
   }
 } else {
   console.log(`构建首次完整版本：${version}，不生成增量补丁。`);
+}
+
+// ACT: 发布前把 FFmpeg 二进制下载进 build/ffmpeg-bundled，随安装包内置，首次启动免下载。
+//      下载失败不阻断打包：安装后仍可通过插件市场的 FFmpeg 面板下载。
+const bundledDir = join(projectDir, "build/ffmpeg-bundled", desktopTarget || `${process.platform}-${process.arch}`);
+if (existsSync(join(bundledDir, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"))) {
+  console.log(`FFmpeg 已就绪，跳过内置下载：${bundledDir}`);
+} else {
+  try {
+    const { downloadSources, target } = await import("@toonflow/ffmpeg");
+    const source = downloadSources.find(item => item.available)?.id;
+    if (!source) throw new Error("没有可用的下载源");
+    mkdirSync(bundledDir, { recursive: true });
+    console.log(`下载 FFmpeg（${source}）到 ${bundledDir} …`);
+    await installFfmpeg(bundledDir, source, AbortSignal.timeout(15 * 60 * 1000), state => {
+      if (state.phase === "downloading" && state.received > 0) console.log(`  已下载 ${(state.received / 1e6).toFixed(1)} MB`);
+    });
+    console.log(`FFmpeg 内置完成：${bundledDir}`);
+  } catch (error) {
+    console.warn(`FFmpeg 内置失败，安装包将不包含 FFmpeg（可安装后从插件市场下载）：`, error);
+  }
 }
 
 await $`${process.execPath} run package:desktop`

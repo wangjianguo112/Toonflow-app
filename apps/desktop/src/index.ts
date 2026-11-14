@@ -162,6 +162,7 @@ async function start() {
       extRoot: resolve(PATHS.VIEWS_FOLDER, "../ext"),
       providersRoot: resolve(PATHS.VIEWS_FOLDER, "../providers"),
       skillsRoot: resolve(PATHS.VIEWS_FOLDER, "../skills"),
+      ffmpegBundledRoot: resolve(PATHS.VIEWS_FOLDER, "../ffmpeg-bundled"),
       // ACT: 暂不安装内置团队，随团队打包一同恢复。
       // agentsRoot: resolve(PATHS.VIEWS_FOLDER, "../agents"),
       pluginRevision: hash,

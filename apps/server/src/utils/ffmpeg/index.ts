@@ -1,7 +1,9 @@
 import { t, translateError, translateMessage } from "@/lib/i18n";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import { build, createFfmpeg, downloadSources, executeFfmpegInWorker, getToolStatus, installFfmpeg, target } from "@toonflow/ffmpeg";
 import type { BrowserFfmpegRequest, DownloadState, FfmpegMode, FfmpegRemoteEvent, SourceId } from "@toonflow/ffmpeg";
+import { copyFile, mkdir } from "@toonflow/file";
 import conf from "@/utils/conf";
 import { getRuntimePlatform } from "@/lib/platform";
 
@@ -12,6 +14,34 @@ let downloadError: unknown;
 let controller: AbortController | undefined;
 const requiredListeners = new Set<() => void>();
 
+// ACT: 安装包可内置 FFmpeg（Resources/app/ffmpeg-bundled/<target>）；首次启动自动复制到数据目录，免下载。
+let bundledRoot: string | undefined;
+let bundledChecked = false;
+
+export function setFfmpegBundledRoot(root?: string) {
+  bundledRoot = root;
+}
+
+async function ensureBundledFfmpeg() {
+  if (bundledChecked || !bundledRoot) return;
+  bundledChecked = true;
+  try {
+    const exeName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+    const probeName = process.platform === "win32" ? "ffprobe.exe" : "ffprobe";
+    // ACT: 打包结构为 ffmpeg-bundled/<target>/ffmpeg.exe（target 与数据目录一致）。
+    const bundledDir = join(bundledRoot, target);
+    const bundledExe = join(bundledDir, exeName);
+    const bundledProbe = join(bundledDir, probeName);
+    if (existsSync(join(directory, exeName)) && existsSync(join(directory, probeName))) return;
+    if (!existsSync(bundledExe) || !existsSync(bundledProbe)) return;
+    await mkdir(directory, { recursive: true });
+    await copyFile(bundledExe, join(directory, exeName));
+    await copyFile(bundledProbe, join(directory, probeName));
+  } catch {
+    // ACT: 内置副本缺失或复制失败时静默回退，用户仍可从插件市场下载。
+  }
+}
+
 export function onRequired(listener: () => void) {
   requiredListeners.add(listener);
   return () => { requiredListeners.delete(listener); };
@@ -19,6 +49,7 @@ export function onRequired(listener: () => void) {
 
 export async function prepareWorkspaceFfmpeg(signal?: AbortSignal) {
   signal?.throwIfAborted();
+  await ensureBundledFfmpeg();
   const { tools } = await getStatus();
   signal?.throwIfAborted();
   if (!tools.ffmpeg.path || tools.ffmpeg.error || !tools.ffprobe.path || tools.ffprobe.error) {
@@ -54,6 +85,7 @@ export function getProgress() {
 }
 
 export async function getStatus() {
+  await ensureBundledFfmpeg();
   const raw = conf.get("settings", {}).ffmpeg;
   const value = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const mode: FfmpegMode = value.mode === "download" || value.mode === "system" ? value.mode : "auto";

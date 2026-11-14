@@ -20,6 +20,7 @@ const app = await createApp({
   // agentsRoot: resolve(appDirectory, "build/agents"),
   providersRoot: resolve(appDirectory, fromSource ? "packages/providers/src" : "build/providers"),
   skillsRoot: resolve(appDirectory, fromSource ? "packages/skills" : "build/skills"),
+  ffmpegBundledRoot: fromSource ? resolve(appDirectory, "build/ffmpeg-bundled") : resolve(appDirectory, "ffmpeg-bundled"),
 });
 const { initializeMcpRuntime } = await import("./utils/mcp/runtime");
 const { startMobileLinkRuntime } = await import("./utils/mobileLink");
