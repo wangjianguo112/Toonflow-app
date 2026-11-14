@@ -77,7 +77,7 @@
 import { computed, nextTick, ref } from "vue";
 import { useVueFlow } from "@vue-flow/core";
 import { IconVideo, IconMovie } from "@tabler/icons-vue";
-import { ElButton, ElCard, ElProgress, ElRadioGroup, ElRadioButton } from "element-plus";
+import { ElButton, ElCard, ElMessage, ElProgress, ElRadioGroup, ElRadioButton } from "element-plus";
 import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import type { BrowserFfmpegCommand, BrowserFfmpegFactory, FfprobeData } from "@toonflow/ffmpeg/browser";
 import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
@@ -283,15 +283,9 @@ async function compose(signal?: AbortSignal) {
     if (!hasAudio.some(Boolean) && !dubbing) throw new Error("所有片段都没有音轨，且未连接配音；无法合成有声成片");
     const totalDuration = durations.reduce((sum, duration) => sum + duration, 0);
 
-    // 字幕：解析为 SRT 并写入工作区；确认当前 FFmpeg 支持 subtitles 滤镜。
+    // 字幕：解析为 SRT 并写入工作区；当前 FFmpeg 不支持 subtitles 滤镜时，合成会以滤镜错误失败。
     let subtitlePath: string | undefined;
     if (subtitle) {
-      const filters = await factory.availableFilters().catch(() => null as Record<string, unknown> | null);
-      const filterNames = Array.isArray(filters) ? filters.map(item => typeof item === "string" ? item : (item as { name?: string })?.name)
-        : filters ? Object.keys(filters) : [];
-      if (!filterNames.includes("subtitles")) {
-        throw new Error("当前 FFmpeg 不支持字幕滤镜（缺少 subtitles），请升级 FFmpeg 或去掉字幕后合成");
-      }
       const srt = buildSrt(subtitle, totalDuration);
       if (!srt) throw new Error("字幕文本无法解析为 SRT（检查时间戳格式或逐行台词）");
       subtitlePath = `${directory}/sub.srt`;

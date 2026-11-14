@@ -183,7 +183,9 @@ const minimumLength = computed(() => Math.min(0.01, clipLimit.value));
 const startPercent = computed(() => duration.value && Number.isFinite(start.value) ? Math.min(100, Math.max(0, start.value / duration.value * 100)) : 0);
 const endPercent = computed(() => duration.value && Number.isFinite(end.value) ? Math.min(100, Math.max(0, end.value / duration.value * 100)) : 100);
 const validRange = computed(() => Number.isFinite(start.value) && Number.isFinite(end.value) && start.value >= 0 && end.value > start.value && end.value <= duration.value);
-const editorValid = computed(() => !!clipEditor.value?.valid?.value);
+const editorValid = computed(() => segments.value.length > 0
+  && segments.value.every(segment => Number.isFinite(segment.start) && Number.isFinite(segment.end)
+    && segment.start >= 0 && segment.end > segment.start));
 const adjustHasChanges = computed(() => adjustSpeed.value !== 1 || adjustRotate.value !== 0 || adjustFlip.value !== ""
   || cropWidth.value > 0 && (cropX.value > 0 || cropY.value > 0 || cropWidth.value !== videoWidth.value || cropHeight.value !== videoHeight.value)
   || adjustVolume.value !== 1 || adjustFadeIn.value > 0 || adjustFadeOut.value > 0);

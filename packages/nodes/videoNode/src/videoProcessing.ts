@@ -142,16 +142,18 @@ export async function processVideo(ffmpeg: BrowserFfmpegFactory, source: string,
     const videoLabels: string[] = [];
     const audioLabels: string[] = [];
     segments.forEach((segment, index) => {
-      filters.push(`[0:v:0]atrim=start=${segment.start}:end=${segment.end},setpts=PTS-STARTPTS[v${index}]`);
+      filters.push(`[0:v:0]trim=start=${segment.start}:end=${segment.end},setpts=PTS-STARTPTS[v${index}]`);
       videoLabels.push(`[v${index}]`);
       if (hasAudio) {
         filters.push(`[0:a:0]atrim=start=${segment.start}:end=${segment.end},asetpts=PTS-STARTPTS[a${index}]`);
         audioLabels.push(`[a${index}]`);
       }
     });
-    filters.push(`${videoLabels.join("")}concat=n=${segments.length}:v=1:a=${hasAudio ? 1 : 0}[cv]${hasAudio ? "[ca]" : ""}`);
+    // ACT: 视频/音频各自单独 concat，避免一个滤镜元素带双输出标签被 fluent 拆坏。
+    filters.push(`${videoLabels.join("")}concat=n=${segments.length}:v=1:a=0[cv]`);
     filters.push("[cv]pad=ceil(iw/2)*2:ceil(ih/2)*2[cvo]");
-    command.complexFilter(filters)
+    if (hasAudio) filters.push(`${audioLabels.join("")}concat=n=${segments.length}:v=0:a=1[ca]`);
+    command.output(normalizePath(videoPath!)).complexFilter(filters)
       .outputOptions("-map", "[cvo]", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart")
       .videoCodec("libx264");
     if (hasAudio) command.outputOptions("-map", "[ca]").audioCodec("aac").audioBitrate(192);
@@ -166,6 +168,14 @@ export async function processVideo(ffmpeg: BrowserFfmpegFactory, source: string,
       audioFilters.push(`atempo=${tempo.toFixed(4)}`);
     } else {
       const rotate = options.rotate ?? 0;
+      if (options.speed !== undefined && options.speed !== 1) {
+        videoFilters.push(`setpts=PTS/${options.speed}`);
+        let tempo = options.speed;
+        // ACT: 每级保持在 0.5–2 倍，避免高倍 atempo 跳过采样，与音频节点同一套链。
+        while (tempo < 0.5) { audioFilters.push("atempo=0.5"); tempo /= 0.5; }
+        while (tempo > 2) { audioFilters.push("atempo=2"); tempo /= 2; }
+        audioFilters.push(`atempo=${tempo.toFixed(4)}`);
+      }
       if (rotate === 90) videoFilters.push("transpose=clock");
       else if (rotate === 270) videoFilters.push("transpose=cclock");
       else if (rotate === 180) videoFilters.push("hflip", "vflip");
