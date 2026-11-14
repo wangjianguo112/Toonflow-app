@@ -30,6 +30,15 @@
           @preview="setReferencePreview"
           @remove="removeReference" />
         <div v-if="!refList.length" class="referenceHint">把视频片段节点连到本节点，即可按连线顺序拼接成片</div>
+        <div v-if="clips.length >= 2" class="referenceHint composeOption">
+          <span>片段转场</span>
+          <el-radio-group v-model="transitionMode" size="small" aria-label="片段转场">
+            <el-radio-button value="none">无</el-radio-button>
+            <el-radio-button value="fade">叠化</el-radio-button>
+            <el-radio-button value="slideleft">滑动</el-radio-button>
+            <el-radio-button value="wipeleft">擦除</el-radio-button>
+          </el-radio-group>
+        </div>
         <template v-if="audioRefList.length">
           <referenceItem
             v-model="audioRefList"
@@ -97,10 +106,14 @@ const videoWidth = ref(0);
 const exporting = ref(false);
 const exportProgress = ref(0);
 
-const data = computed(() => node.data as { audioMode?: "replace" | "mix"; subtitleText?: string });
+const data = computed(() => node.data as { audioMode?: "replace" | "mix"; subtitleText?: string; transition?: "none" | "fade" | "slideleft" | "wipeleft" });
 const audioMode = computed({
   get: () => data.value.audioMode ?? "replace",
   set: (mode: "replace" | "mix") => { data.value.audioMode = mode; },
+});
+const transitionMode = computed({
+  get: () => data.value.transition ?? "none",
+  set: (mode: "none" | "fade" | "slideleft" | "wipeleft") => { data.value.transition = mode; },
 });
 
 type Clip = { key: string; name: string; url: string; mimeType: string };
@@ -316,9 +329,37 @@ async function compose(signal?: AbortSignal) {
         labels.push(`[v${index}]`);
       }
     }
-    chains.push(`${labels.join("")}concat=n=${list.length}:v=1:a=${concatAudio}[vout]${concatAudio ? "[aout]" : ""}`);
 
-    let videoLabel = "[vout]";
+    // ACT: 转场时长取 0.5 秒与最短片段一半的较小值；过短片段自动退回直接拼接。
+    const transition = clips.length >= 2 && transitionMode.value !== "none"
+      ? Math.min(0.5, Math.floor(Math.min(...durations) / 2 * 100) / 100) : 0;
+    let videoLabel: string;
+    let concatAudioLabel = "";
+    if (transition >= 0.1) {
+      const type = transitionMode.value;
+      let accumulated = durations[0]!;
+      let lastVideo = "[v0]";
+      let lastAudio = concatAudio ? "[a0]" : "";
+      for (let index = 1; index < list.length; index += 1) {
+        const offset = Math.max(0, accumulated - transition).toFixed(3);
+        const videoOut = `[vx${index}]`;
+        chains.push(`${lastVideo}[v${index}]xfade=transition=${type}:duration=${transition.toFixed(3)}:offset=${offset}${videoOut}`);
+        lastVideo = videoOut;
+        if (concatAudio) {
+          const audioOut = `[ax${index}]`;
+          chains.push(`${lastAudio}[a${index}]acrossfade=d=${transition.toFixed(3)}${audioOut}`);
+          lastAudio = audioOut;
+        }
+        accumulated = accumulated + durations[index]! - transition;
+      }
+      videoLabel = lastVideo;
+      concatAudioLabel = lastAudio;
+    } else {
+      chains.push(`${labels.join("")}concat=n=${list.length}:v=1:a=${concatAudio}[vout]${concatAudio ? "[aout]" : ""}`);
+      videoLabel = "[vout]";
+      concatAudioLabel = concatAudio ? "[aout]" : "";
+    }
+
     if (subtitlePath) {
       const fontSize = Math.max(14, Math.round(height / 27));
       const style = `FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=1,Shadow=0,Bold=1,MarginV=${Math.round(height / 16)}`;
@@ -329,14 +370,18 @@ async function compose(signal?: AbortSignal) {
     let audioLabel = "";
     if (dubbing) {
       chains.push(`[${dubbingIndex}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[ax]`);
-      if (concatAudio && mode === "mix") {
-        chains.push(`[aout][ax]amix=inputs=2:duration=first[aout2]`);
-        audioLabel = "[aout2]";
+      if (concatAudioLabel) {
+        if (mode === "mix") {
+          chains.push(`${concatAudioLabel}[ax]amix=inputs=2:duration=first[aout2]`);
+          audioLabel = "[aout2]";
+        } else {
+          audioLabel = "[ax]";
+        }
       } else {
         audioLabel = "[ax]";
       }
-    } else if (concatAudio) {
-      audioLabel = "[aout]";
+    } else if (concatAudioLabel) {
+      audioLabel = concatAudioLabel;
     }
     if (!audioLabel) throw new Error("无法确定成片音轨");
 
@@ -391,6 +436,19 @@ nodeTools.register({
     signal?.throwIfAborted();
     audioMode.value = mode;
     return { mode };
+  },
+});
+
+nodeTools.register({
+  name: "setComposeTransition",
+  description: "设置片段间转场：none 直接拼接，fade 叠化，slideleft 滑动，wipeleft 擦除；转场时长自动取 0.5 秒与最短片段一半的较小值",
+  parameters: z.strictObject({
+    type: z.enum(["none", "fade", "slideleft", "wipeleft"]),
+  }),
+  async execute({ type }, { signal }) {
+    signal?.throwIfAborted();
+    transitionMode.value = type;
+    return { type };
   },
 });
 </script>

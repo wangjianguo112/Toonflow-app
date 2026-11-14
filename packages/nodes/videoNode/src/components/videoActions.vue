@@ -2,8 +2,8 @@
   <el-dialog
     v-model="visible"
     :title="actionLabels[action]"
-    :width="action === 'trim' ? '760px' : '520px'"
-    :top="action === 'trim' ? '6vh' : '15vh'"
+    :width="action === 'trim' || action === 'clip' ? '820px' : action === 'adjust' ? '600px' : '520px'"
+    :top="action === 'trim' || action === 'clip' ? '6vh' : '15vh'"
     appendToBody
     destroyOnClose
     :closeOnClickModal="!processing"
@@ -65,6 +65,56 @@
         </div>
         <p class="actionHint">{{ validRange ? '截取后生成新视频节点，原视频会保留。' : '请选择有效的起止时间。' }}</p>
       </template>
+      <template v-else-if="action === 'clip'">
+        <videoClipEditor ref="clipEditor" v-model="segments" :src="playbackSrc" :disabled="processing || disabled" />
+        <p class="actionHint">{{ editorValid ? '导出后生成新视频节点，原视频会保留，删除的片段会被跳过。' : '请至少保留一个有效片段。' }}</p>
+      </template>
+      <template v-else-if="action === 'adjust'">
+        <p v-if="preparingPreview || previewError" class="actionHint" role="status">{{ preparingPreview ? '正在生成兼容预览…' : previewError }}</p>
+        <video ref="preview" class="clipPreview" :src="playbackSrc" controls playsinline preload="auto" aria-label="画面调节预览" @loadeddata="readAdjustMetadata" @error="handleError($event)" />
+        <div class="adjustForm">
+          <label class="adjustRow">
+            <span class="adjustLabel">播放速度</span>
+            <el-select v-model="adjustSpeed" class="adjustSelect" :disabled="processing" aria-label="播放速度">
+              <el-option v-for="item in speedOptions" :key="item" :label="`${item} 倍`" :value="item" />
+            </el-select>
+          </label>
+          <label class="adjustRow">
+            <span class="adjustLabel">旋转</span>
+            <el-select v-model="adjustRotate" class="adjustSelect" :disabled="processing" aria-label="旋转">
+              <el-option label="不旋转" :value="0" />
+              <el-option label="顺时针 90°" :value="90" />
+              <el-option label="180°" :value="180" />
+              <el-option label="逆时针 90°" :value="270" />
+            </el-select>
+            <span class="adjustLabel">镜像</span>
+            <el-select v-model="adjustFlip" class="adjustSelect" :disabled="processing" aria-label="镜像">
+              <el-option label="不镜像" value="" />
+              <el-option label="水平镜像" value="h" />
+              <el-option label="垂直镜像" value="v" />
+            </el-select>
+          </label>
+          <div class="adjustRow">
+            <span class="adjustLabel">裁切</span>
+            <label class="cropField"><input v-model.number="cropX" class="timeInput" type="number" min="0" step="1" :disabled="processing" aria-label="裁切横向起点" /><span>X</span></label>
+            <label class="cropField"><input v-model.number="cropY" class="timeInput" type="number" min="0" step="1" :disabled="processing" aria-label="裁切纵向起点" /><span>Y</span></label>
+            <label class="cropField"><input v-model.number="cropWidth" class="timeInput" type="number" min="2" step="1" :disabled="processing" aria-label="裁切宽度" /><span>宽</span></label>
+            <label class="cropField"><input v-model.number="cropHeight" class="timeInput" type="number" min="2" step="1" :disabled="processing" aria-label="裁切高度" /><span>高</span></label>
+            <el-button text :disabled="processing" @click="resetCrop">重置</el-button>
+          </div>
+          <label class="adjustRow">
+            <span class="adjustLabel">音量 {{ Math.round(adjustVolume * 100) }}%</span>
+            <el-slider v-model="adjustVolume" class="volumeSlider" :min="0" :max="3" :step="0.05" :disabled="processing" aria-label="音量倍数" />
+          </label>
+          <label class="adjustRow">
+            <span class="adjustLabel">淡入</span>
+            <input v-model.number="adjustFadeIn" class="timeInput" type="number" min="0" max="5" step="0.1" :disabled="processing" aria-label="淡入秒数" /><span class="adjustUnit">秒</span>
+            <span class="adjustLabel">淡出</span>
+            <input v-model.number="adjustFadeOut" class="timeInput" type="number" min="0" max="5" step="0.1" :disabled="processing" aria-label="淡出秒数" /><span class="adjustUnit">秒</span>
+          </label>
+        </div>
+        <p class="actionHint">{{ adjustHint }}</p>
+      </template>
       <p v-else class="actionHint">{{ action === 'extractAudio' ? '提取音轨并生成音频节点，保留原视频。' : '生成静音视频和音频两个节点，保留原视频。' }}</p>
       <div v-if="processing" class="processingStatus" role="status" aria-live="polite">
         <el-progress :percentage="100" :indeterminate="true" :showText="false" />
@@ -72,7 +122,7 @@
       </div>
       <div class="panelActions">
         <el-button :disabled="cancelling" @click="processing ? cancel() : visible = false">{{ processing ? '取消处理' : '取消' }}</el-button>
-        <el-button type="primary" :loading="processing" :disabled="disabled || !file || (action === 'trim' && !validRange)" @click="run">{{ actionLabels[action] }}</el-button>
+        <el-button type="primary" :loading="processing" :disabled="disabled || !file || !canExport" @click="run">{{ actionLabels[action] }}</el-button>
       </div>
     </div>
   </el-dialog>
@@ -81,11 +131,12 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useNode, useVueFlow, type Node } from "@vue-flow/core";
-import { ElButton, ElDialog, ElMessage, ElProgress } from "element-plus";
+import { ElButton, ElDialog, ElMessage, ElProgress, ElSelect, ElOption, ElSlider } from "element-plus";
 import { useNodeFiles, useNodeFfmpeg, useNodeEvent, type WorkspaceFiles, type NodeMediaValue } from "@toonflow/nodes-scaffold/runtime";
 import { showNodeError } from "@toonflow/node-shared/showNodeError";
-import { processVideo } from "../videoProcessing";
+import { processVideo, type VideoSegment } from "../videoProcessing";
 import { useMediaPreview } from "@toonflow/node-shared/mediaPreview";
+import videoClipEditor from "./videoClipEditor.vue";
 
 const props = defineProps<{ file?: NodeMediaValue; src: string; disabled?: boolean }>();
 const { node } = useNode();
@@ -95,10 +146,11 @@ const loadFfmpeg = useNodeFfmpeg();
 const nodeEvent = useNodeEvent();
 const getCanvas = inject<(() => { id: string } | undefined) | undefined>("canvas", undefined);
 const batchHistory = inject<(action: () => Promise<void>) => Promise<void>>("batchCanvasHistory", action => action());
-const actionLabels = { extractAudio: "提取音轨", separate: "分离音视频", trim: "截取片段" };
+const actionLabels = { extractAudio: "提取音轨", separate: "分离音视频", trim: "截取片段", clip: "剪辑视频", adjust: "调节画面" };
 const action = ref<keyof typeof actionLabels>("trim");
 const visible = ref(false);
-const { src: playbackSrc, preparing: preparingPreview, error: previewError, handleError, handleLoaded } = useMediaPreview(() => visible.value && action.value === "trim" ? props.src : "", "video");
+const { src: playbackSrc, preparing: preparingPreview, error: previewError, handleError, handleLoaded } = useMediaPreview(
+  () => visible.value && (action.value === "trim" || action.value === "clip" || action.value === "adjust") ? props.src : "", "video");
 const processing = ref(false);
 const creatingAnalysis = ref(false);
 const cancelling = ref(false);
@@ -111,11 +163,42 @@ const currentTime = ref(0);
 const frames = ref<string[]>([]);
 const frameCount = 10;
 const dragging = ref<"start" | "end">();
+const clipEditor = ref<InstanceType<typeof videoClipEditor>>();
+const segments = ref<VideoSegment[]>([]);
+const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4] as const;
+const adjustSpeed = ref<number>(1);
+const adjustRotate = ref<0 | 90 | 180 | 270>(0);
+const adjustFlip = ref<"" | "h" | "v">("");
+const cropX = ref(0);
+const cropY = ref(0);
+const cropWidth = ref(0);
+const cropHeight = ref(0);
+const adjustVolume = ref(1);
+const adjustFadeIn = ref(0);
+const adjustFadeOut = ref(0);
+const videoWidth = ref(0);
+const videoHeight = ref(0);
 const clipLimit = computed(() => duration.value < 0.01 ? duration.value : Math.floor(duration.value * 100) / 100);
 const minimumLength = computed(() => Math.min(0.01, clipLimit.value));
 const startPercent = computed(() => duration.value && Number.isFinite(start.value) ? Math.min(100, Math.max(0, start.value / duration.value * 100)) : 0);
 const endPercent = computed(() => duration.value && Number.isFinite(end.value) ? Math.min(100, Math.max(0, end.value / duration.value * 100)) : 100);
 const validRange = computed(() => Number.isFinite(start.value) && Number.isFinite(end.value) && start.value >= 0 && end.value > start.value && end.value <= duration.value);
+const editorValid = computed(() => !!clipEditor.value?.valid?.value);
+const adjustHasChanges = computed(() => adjustSpeed.value !== 1 || adjustRotate.value !== 0 || adjustFlip.value !== ""
+  || cropWidth.value > 0 && (cropX.value > 0 || cropY.value > 0 || cropWidth.value !== videoWidth.value || cropHeight.value !== videoHeight.value)
+  || adjustVolume.value !== 1 || adjustFadeIn.value > 0 || adjustFadeOut.value > 0);
+const adjustHint = computed(() => {
+  if (!duration.value) return "等待预览加载…";
+  if (!adjustHasChanges.value) return "调整上方任意参数后导出；导出生成新视频节点，原视频会保留。";
+  if (adjustFadeIn.value > 0 || adjustFadeOut.value > 0) return "淡入淡出会同时作用于画面与声音；导出生成新视频节点，原视频会保留。";
+  return "导出生成新视频节点，原视频会保留。";
+});
+const canExport = computed(() => {
+  if (action.value === "trim") return validRange.value;
+  if (action.value === "clip") return editorValid.value;
+  if (action.value === "adjust") return !!duration.value && adjustHasChanges.value;
+  return true;
+});
 let controller: AbortController | undefined;
 let job: Promise<void> | undefined;
 let thumbnailVideo: HTMLVideoElement | undefined;
@@ -153,8 +236,15 @@ function open(value: keyof typeof actionLabels) {
   duration.value = start.value = end.value = 0;
   currentTime.value = 0;
   frames.value = [];
+  segments.value = [];
+  adjustSpeed.value = 1;
+  adjustRotate.value = 0;
+  adjustFlip.value = "";
+  adjustVolume.value = 1;
+  adjustFadeIn.value = adjustFadeOut.value = 0;
+  videoWidth.value = videoHeight.value = 0;
   visible.value = true;
-  if (value !== "trim") run();
+  if (value === "extractAudio" || value === "separate") run();
 }
 
 async function createFrameAnalysis() {
@@ -215,6 +305,23 @@ function readDuration(event: Event) {
   duration.value = Number.isFinite(value) && value > 0 ? value : 0;
   end.value = clipLimit.value;
   if (duration.value) loadThumbnails();
+}
+
+function readAdjustMetadata(event: Event) {
+  if (!handleLoaded(event)) return;
+  const value = (event.currentTarget as HTMLVideoElement).duration;
+  duration.value = Number.isFinite(value) && value > 0 ? value : 0;
+  const element = event.currentTarget as HTMLVideoElement;
+  videoWidth.value = element.videoWidth || 0;
+  videoHeight.value = element.videoHeight || 0;
+  resetCrop();
+}
+
+function resetCrop() {
+  cropX.value = 0;
+  cropY.value = 0;
+  cropWidth.value = videoWidth.value;
+  cropHeight.value = videoHeight.value;
 }
 
 function formatTime(value: number) {
@@ -339,8 +446,26 @@ function seekTrack(event: PointerEvent) {
 }
 
 function run() {
-  if (processing.value || props.disabled || !props.file || (action.value === "trim" && !validRange.value)) return;
+  if (processing.value || props.disabled || !props.file || !canExport.value) return;
   job = process();
+}
+
+function actionLabelSuffix() {
+  if (action.value === "trim") return `${start.value.toFixed(2)}–${end.value.toFixed(2)} 秒`;
+  if (action.value === "clip") return `剪辑 ${segments.value.length} 段`;
+  if (action.value === "adjust") {
+    const parts: string[] = [];
+    if (adjustSpeed.value !== 1) parts.push(`${adjustSpeed.value} 倍速`);
+    if (adjustRotate.value) parts.push(`旋转 ${adjustRotate.value}°`);
+    if (adjustFlip.value === "h") parts.push("水平镜像");
+    else if (adjustFlip.value === "v") parts.push("垂直镜像");
+    if (cropWidth.value > 0 && (cropX.value > 0 || cropY.value > 0 || cropWidth.value !== videoWidth.value || cropHeight.value !== videoHeight.value)) parts.push("裁切");
+    if (adjustVolume.value !== 1) parts.push(`音量 ${Math.round(adjustVolume.value * 100)}%`);
+    if (adjustFadeIn.value > 0) parts.push(`淡入 ${adjustFadeIn.value} 秒`);
+    if (adjustFadeOut.value > 0) parts.push(`淡出 ${adjustFadeOut.value} 秒`);
+    return parts.length ? parts.join(" · ") : "调节画面";
+  }
+  return action.value === "separate" ? "静音视频" : "";
 }
 
 async function process() {
@@ -350,10 +475,12 @@ async function process() {
   const source = props.file!.url;
   const clipStart = start.value;
   const clipEnd = end.value;
+  const clipSegments = segments.value.map(segment => ({ ...segment }));
   const current = controller = new AbortController();
   processing.value = true;
   cancelling.value = false;
   preview.value?.pause();
+  clipEditor.value?.pause();
   const outputs = requiredTypes.map(type => {
     const id = crypto.randomUUID();
     const audio = type === "remote-audioNode";
@@ -380,6 +507,16 @@ async function process() {
       videoPath: outputs.find(output => !output.audio)?.path,
       start: clipStart,
       end: clipEnd,
+      segments: clipSegments,
+      speed: adjustSpeed.value,
+      rotate: adjustRotate.value,
+      flip: adjustFlip.value,
+      crop: cropWidth.value > 0 && cropHeight.value > 0
+        ? { x: cropX.value, y: cropY.value, width: cropWidth.value, height: cropHeight.value }
+        : undefined,
+      volume: adjustVolume.value,
+      fadeIn: adjustFadeIn.value > 0 ? adjustFadeIn.value : undefined,
+      fadeOut: adjustFadeOut.value > 0 ? adjustFadeOut.value : undefined,
     }, current.signal);
     current.signal.throwIfAborted();
     const width = Math.max(320, media.width && media.height ? 240 * media.width / media.height + 18 : 320);
@@ -395,7 +532,7 @@ async function process() {
       type: output.type,
       position: { x, y: y + index * 320 },
       data: {
-        label: `${node.data.label || "视频"} · ${output.audio ? "音轨" : operation === "separate" ? "静音视频" : `${clipStart.toFixed(2)}–${clipEnd.toFixed(2)} 秒`}`,
+        label: `${node.data.label || "视频"} · ${output.audio ? "音轨" : actionLabelSuffix()}`,
         outputs: { [output.audio ? "audio" : "video"]: { dataType: output.audio ? "AUDIO" : "VIDEO", value: { url: output.path, mimeType: output.audio ? "audio/mp4" : "video/mp4" } } },
       },
     }));
@@ -424,6 +561,60 @@ async function process() {
 <style scoped lang="scss">
 .videoActionPanel {
   .clipPreview { display: block; width: 100%; height: min(30vh, 300px); background: #0c0e13; border-radius: 12px; object-fit: contain; }
+
+  .adjustForm {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+    padding: 16px 18px;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 12px;
+    background: var(--el-fill-color-light);
+
+    .adjustRow {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+
+      .adjustLabel {
+        flex-shrink: 0;
+        min-width: 64px;
+        color: var(--el-text-color-regular);
+        font-size: 12px;
+      }
+
+      .adjustSelect { width: 150px; }
+
+      .adjustUnit { color: var(--el-text-color-secondary); font-size: 12px; }
+
+      .cropField {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        .timeInput { width: 72px; }
+        span { color: var(--el-text-color-secondary); font-size: 12px; }
+      }
+
+      .volumeSlider { flex: 1; min-width: 160px; max-width: 280px; margin: 0 8px; }
+
+      .timeInput {
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--el-border-color);
+        border-radius: var(--el-border-radius-base);
+        background: var(--el-bg-color);
+        color: var(--el-text-color-primary);
+        font: inherit;
+        font-size: 12px;
+
+        &:disabled { opacity: 0.55; }
+      }
+    }
+  }
+
   .clipTimeline {
     margin-top: 20px;
     padding: 16px 18px 12px;
