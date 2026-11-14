@@ -7,9 +7,7 @@ import { canvasShortcutFields, defaultCanvasShortcuts, getShortcutBindings, isSh
 import { normalizeNodeMenu, type StoredNodeMenuItem } from "@toonflow/server/nodeMenu";
 import { nodeToolPermissionsSchema } from "@toonflow/tool-canvas/runtime";
 import type { ReasoningEfforts, ThinkingLevel } from "@toonflow/server/modelReasoning";
-import type { ProviderSources } from "@toonflow/server/channel";
-import http from "@/lib/http";
-import { currentUser, publicWeb } from "@/stores/multiTenant";
+import { publicWeb } from "@/stores/multiTenant";
 import "element-plus/es/components/message/style/css";
 
 export const settings = ref<Record<string, unknown>>({});
@@ -116,48 +114,9 @@ export const toonflowAccountToken = computed(() => {
 });
 export const customProviders = computed<CustomProvider[]>(() => {
   const providers = Array.isArray(settings.value.customProviders) ? [...settings.value.customProviders] : [];
-  const accountProvider = settings.value.toonflowProvider as CustomProvider | null | undefined;
-  if (toonflowAccountToken.value && (accountProvider?.id === "Toonflow" || accountProvider?.id === "toonflow")) providers.unshift(accountProvider);
   return providers.filter((item): item is CustomProvider => !!item && typeof item.id === "string" && typeof item.label === "string" && Array.isArray(item.models)
     && item.models.every((model: CustomProviderModel) => !!model && typeof model.id === "string" && typeof model.label === "string"));
 });
-
-export const toonflowProviderLoading = ref(false);
-export const toonflowProviderError = ref("");
-let providerRequest: AbortController | undefined;
-
-export async function refreshToonflowProvider() {
-  providerRequest?.abort();
-  toonflowProviderError.value = "";
-  toonflowProviderLoading.value = false;
-  const token = toonflowAccountToken.value;
-  if (multiTenantEnabled.value || !token) { providerRequest = undefined; return; }
-  const request = new AbortController();
-  providerRequest = request;
-  toonflowProviderLoading.value = true;
-  try {
-    const sources = await http<ProviderSources>({
-      method: "GET", url: "/api/channel/provider/getSource", signal: request.signal,
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    request.signal.throwIfAborted();
-    const { data } = await axios.post<{ code: number; data: { provider: CustomProvider }; message?: string }>(
-      "/api/providers/account/install", { sources, token },
-      { signal: request.signal, headers: { "x-toonflow-workspace": "1", Authorization: `Bearer ${token}` }, timeout: 45000 },
-    );
-    if (data.code !== 200 || data.data?.provider?.id !== "Toonflow") throw new Error(data.message || "安装账号供应商失败");
-    await saveSettings(() => request.signal.aborted || multiTenantEnabled.value || toonflowAccountToken.value !== token
-      ? undefined : { toonflowProvider: data.data.provider }, request.signal);
-  } catch (error) {
-    if (!request.signal.aborted && !multiTenantEnabled.value && toonflowAccountToken.value === token) {
-      toonflowProviderError.value = axios.isAxiosError<{ message?: string }>(error)
-        ? error.response?.data?.message || "安装账号供应商失败，请刷新重试"
-        : error instanceof Error ? error.message : "安装账号供应商失败，请刷新重试";
-    }
-  } finally {
-    if (providerRequest === request) { providerRequest = undefined; toonflowProviderLoading.value = false; }
-  }
-}
 
 type ResolvedAiModel = { providerId: string; providerLabel: string; modelId: string; routeId?: string; label: string; contextWindow: number; reasoningLevels: ThinkingLevel[] };
 const availableModels = ref<ResolvedAiModel[]>([]);
@@ -191,7 +150,6 @@ export async function loadSettings() {
   // 等初始化引发的监听执行完，再允许自动保存。
   await nextTick();
   settingsReady = true;
-  void refreshToonflowProvider();
 }
 
 export function saveSettings(update?: (current: Record<string, unknown>) => Record<string, unknown> | undefined, signal?: AbortSignal) {
@@ -202,10 +160,10 @@ export function saveSettings(update?: (current: Record<string, unknown>) => Reco
     if (update && !patch) return false;
     const requestedSettings = { ...settings.value, ...patch };
     const requestedMultiTenantVersion = multiTenantVersion;
-    const providerFields = ["customProviders", "mediaProviderConfigs", "toonflowProvider"] as const;
+    const providerFields = ["customProviders", "mediaProviderConfigs"] as const;
     const requestedProviders = providerFields.map(field => JSON.stringify(requestedSettings[field]));
     const requestedNodeMenu = JSON.stringify(((patch?.general ?? settings.value.general) as { nodeMenu?: unknown } | undefined)?.nodeMenu);
-    const { data, headers } = await axios.put<{ code: number; data: { customProviders?: CustomProvider[]; mediaProviderConfigs?: Record<string, unknown>; toonflowProvider?: CustomProvider | null; nodeMenu?: StoredNodeMenuItem[] | null; aiModels?: ResolvedAiModel[]; multiTenantEnabled?: boolean } | null }>(
+    const { data, headers } = await axios.put<{ code: number; data: { customProviders?: CustomProvider[]; mediaProviderConfigs?: Record<string, unknown>; nodeMenu?: StoredNodeMenuItem[] | null; aiModels?: ResolvedAiModel[]; multiTenantEnabled?: boolean } | null }>(
       "/api/settings/save", { settings: requestedSettings, ...(settingsRevision === undefined ? {} : { expectedRevision: settingsRevision }) }, { signal, headers: { "x-toonflow-workspace": "1" } },
     );
     signal?.throwIfAborted();
@@ -239,10 +197,9 @@ export function saveSettings(update?: (current: Record<string, unknown>) => Reco
         settings.value = { ...settings.value, general };
       } finally { applyingSettings = false; }
     }
-    const accountChanged = Object.hasOwn(savedPatch, "toonflowProvider") || Object.hasOwn(savedPatch, "toonflowAccount");
-    if (accountChanged || Object.hasOwn(savedPatch, "customProviders")) invalidateNodeModels("language");
-    if (accountChanged) invalidateNodeModels("media");
-    if (accountChanged || Object.hasOwn(savedPatch, "mediaProviderConfigs")) {
+    const customProvidersChanged = Object.hasOwn(savedPatch, "customProviders");
+    if (customProvidersChanged) invalidateNodeModels("language");
+    if (customProvidersChanged || Object.hasOwn(savedPatch, "mediaProviderConfigs")) {
       window.dispatchEvent(new Event("toonflow:provider-config-changed"));
     }
     return true;
@@ -258,7 +215,3 @@ watch(settings, () => {
       ? "设置已更新，请重新读取后保存" : "设置保存失败，请稍后重试");
   });
 }, { deep: true, flush: "sync" });
-
-watch([() => settings.value.toonflowAccount, multiTenantEnabled], () => {
-  if (settingsReady) void refreshToonflowProvider();
-}, { flush: "sync" });

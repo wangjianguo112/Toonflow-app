@@ -4,7 +4,6 @@
       <h2 id="exploreTitle">探索</h2>
       <div class="toolbarActions">
         <el-input v-model="search" class="searchInput" :prefixIcon="IconSearch" placeholder="搜索项目" aria-label="搜索云端项目" clearable />
-        <el-button :icon="IconPlus" aria-haspopup="dialog" :aria-expanded="publishVisible" @click="publishVisible = true">发布作品</el-button>
       </div>
     </div>
     <div class="categoryFilters" role="group" aria-label="项目分类">
@@ -37,18 +36,16 @@
       <span v-else>正在加载作品…</span>
     </div>
     <exploreDetail v-if="selectedProjectId" :projectId="selectedProjectId" @close="selectedProjectId = ''" />
-    <publishWorkDialog v-if="publishVisible" @closed="publishVisible = false" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useVirtualizer } from "@tanstack/vue-virtual";
-import { IconHeart, IconPlus, IconSearch } from "@tabler/icons-vue";
+import { IconHeart, IconSearch } from "@tabler/icons-vue";
 import type { ExploreCategory, ExplorePage, ExploreProject } from "@toonflow/server/channel";
 import http from "@/lib/http";
 import exploreDetail from "./exploreDetail.vue";
-import publishWorkDialog from "./publishWorkDialog.vue";
 
 const props = defineProps<{ scrollElement?: HTMLElement }>();
 const exploreElement = ref<HTMLElement>();
@@ -57,7 +54,6 @@ const categories = ref<ExploreCategory[]>([]);
 const projects = ref<ExploreProject[]>([]);
 const selectedCategory = ref("");
 const selectedProjectId = ref("");
-const publishVisible = ref(false);
 const search = ref("");
 const loading = ref(false);
 const loadError = ref("");
