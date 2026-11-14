@@ -29,6 +29,16 @@
             </span>
           </li>
         </ol>
+        <div v-if="audioClip" class="optionRow" role="radiogroup" aria-label="配音方式">
+          <span class="optionLabel" :title="audioClip.name">配音 · {{ audioClip.name }}</span>
+          <el-radio-group v-model="audioMode" size="small">
+            <el-radio-button value="replace">替换原声</el-radio-button>
+            <el-radio-button value="mix">与原声混合</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div v-if="subtitleText.trim()" class="optionRow">
+          <span class="optionLabel">字幕 · {{ subtitleSource }}（{{ subtitleText.length }} 字）</span>
+        </div>
         <el-button
           type="primary"
           class="composeButton"
@@ -42,10 +52,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { IconVideo, IconMovie, IconArrowUp, IconArrowDown } from "@tabler/icons-vue";
-import { ElButton, ElMessage, ElProgress } from "element-plus";
-import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import { useVueFlow } from "@vue-flow/core";
+import { IconVideo, IconMovie, IconArrowUp, IconArrowDown } from "@tabler/icons-vue";
+import { ElButton, ElMessage, ElProgress, ElRadioGroup, ElRadioButton } from "element-plus";
+import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import type { BrowserFfmpegCommand, BrowserFfmpegFactory, FfprobeData } from "@toonflow/ffmpeg/browser";
 import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
 import videoPlayer from "@toonflow/node-video/videoPlayer";
@@ -55,6 +65,8 @@ defineOptions({
   icon: IconVideo,
   handles: [
     { id: "in", type: "target", dataType: ["VIDEO"], label: "视频片段输入" },
+    { id: "audio", type: "target", dataType: ["AUDIO"], label: "配音音轨（可选）" },
+    { id: "subtitle", type: "target", dataType: ["STRING"], label: "字幕文本（可选，SRT 或逐行台词）" },
     { id: "video", type: "source", dataType: "VIDEO", label: "成片输出" },
   ] satisfies NodeHandle[],
 });
@@ -62,11 +74,19 @@ const { node, nodeProps, outputs, nodeEvent, files, ffmpeg, updateNodeInternals 
   label: "成片",
 });
 const { refList } = useNodeReferences("in");
+const { refList: audioRefList } = useNodeReferences("audio");
+const { refList: subtitleRefList } = useNodeReferences("subtitle");
 const { findNode } = useVueFlow();
 const player = ref<InstanceType<typeof videoPlayer>>();
 const videoWidth = ref(0);
 const exporting = ref(false);
 const exportProgress = ref(0);
+
+const data = computed(() => node.data as { audioMode?: "replace" | "mix"; subtitleText?: string });
+const audioMode = computed({
+  get: () => data.value.audioMode ?? "replace",
+  set: (mode: "replace" | "mix") => { data.value.audioMode = mode; },
+});
 
 type Clip = { key: string; name: string; url: string; mimeType: string };
 const clips = computed<Clip[]>(() => refList.value.flatMap(item => {
@@ -76,6 +96,29 @@ const clips = computed<Clip[]>(() => refList.value.flatMap(item => {
     || item.value.url.split(/[\\/]/).at(-1) || "片段";
   return [{ key: referenceKey(item), name, url: item.value.url, mimeType: item.value.mimeType }];
 }));
+
+const audioClip = computed(() => {
+  const item = audioRefList.value.find(entry => entry.dataType === "AUDIO" && entry.value);
+  if (!item?.value || typeof item.value === "string") return undefined;
+  const label = findNode(item.source)?.data?.label;
+  return {
+    name: (typeof label === "string" && label.trim()) || item.value.url.split(/[\\/]/).at(-1) || "配音",
+    url: item.value.url,
+    mimeType: item.value.mimeType,
+  };
+});
+
+const subtitleText = computed(() => {
+  const fromInputs = subtitleRefList.value
+    .filter(item => item.dataType === "STRING" && typeof item.value === "string" && item.value.trim())
+    .map(item => item.value as string).join("\n\n").trim();
+  if (fromInputs) return fromInputs;
+  return typeof data.value.subtitleText === "string" ? data.value.subtitleText.trim() : "";
+});
+const subtitleSource = computed(() => {
+  if (subtitleRefList.value.some(item => item.dataType === "STRING" && typeof item.value === "string" && item.value.trim())) return "连线文本";
+  return "节点内文本";
+});
 
 const outputFile = computed(() => outputs.value.video?.dataType === "VIDEO" ? outputs.value.video.value : undefined);
 const previewUrl = files.useFileUrl(
@@ -158,11 +201,44 @@ function parseFps(rate: string | undefined) {
   return numerator / denominator;
 }
 
-/** 拼接为统一规格的 H.264 MP4：尺寸取各片段最大值并补齐偶数，帧率取最高，缺音轨的片段补静音。 */
+/** 把 SRT 或逐行台词规范成 SRT 正文；无时间戳的台词按总时长均匀分配。 */
+function buildSrt(source: string, totalDuration: number): string | undefined {
+  const lineEnd = (line: string) => line.replace(/\r/g, "").trimEnd();
+  if (source.includes("-->")) {
+    const blocks: string[] = [];
+    for (const block of source.replace(/\r/g, "").split(/\n{2,}/)) {
+      const lines = block.split("\n").filter(line => line.trim());
+      const timeIndex = lines.findIndex(line => line.includes("-->"));
+      if (timeIndex < 0 || timeIndex + 1 >= lines.length) continue;
+      const match = /(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})/.exec(lines[timeIndex]!);
+      if (!match) continue;
+      const text = lines.slice(timeIndex + 1).map(lineEnd).filter(Boolean).join("\n");
+      if (!text) continue;
+      blocks.push(`${blocks.length + 1}\n${match[1]!.replace(",", ".")} --> ${match[2]!.replace(",", ".")}\n${text}`);
+    }
+    return blocks.length ? blocks.join("\n\n") + "\n" : undefined;
+  }
+  const lines = source.replace(/\r/g, "").split("\n").map(lineEnd).filter(Boolean);
+  if (!lines.length) return undefined;
+  const interval = totalDuration / lines.length;
+  const format = (seconds: number) => {
+    const clamped = Math.max(0, Math.min(totalDuration, seconds));
+    const whole = Math.floor(clamped);
+    const milli = Math.round((clamped - whole) * 1000);
+    const pad = (value: number, size: number) => String(value).padStart(size, "0");
+    return `${pad(Math.floor(whole / 3600), 2)}:${pad(Math.floor(whole / 60) % 60, 2)}:${pad(whole % 60, 2)},${pad(milli, 3)}`;
+  };
+  return lines.map((text, index) => `${index + 1}\n${format(index * interval)} --> ${format((index + 1) * interval)}\n${text}`).join("\n\n") + "\n";
+}
+
+/** 拼接为统一规格的 H.264 MP4：尺寸取各片段最大值补齐偶数、帧率取最高、缺音轨补静音；可选配音轨与字幕烧录。 */
 async function compose(signal?: AbortSignal) {
   if (exporting.value) throw new Error("成片正在合成，请稍后再试");
   const list = clips.value;
   if (!list.length) throw new Error("请先连接至少一个视频片段节点");
+  const dubbing = audioClip.value;
+  const mode = audioMode.value;
+  const subtitle = subtitleText.value.trim();
   const current = new AbortController();
   const combined = signal ? AbortSignal.any([signal, current.signal]) : current.signal;
   exporting.value = true;
@@ -193,31 +269,84 @@ async function compose(signal?: AbortSignal) {
       return parseFps(video?.avg_frame_rate);
     })))) || 30);
     const hasAudio = infos.map(info => info.streams.some(stream => stream.codec_type === "audio"));
-    if (!hasAudio.some(Boolean)) throw new Error("所有片段都没有音轨，无法合成有声成片");
+    if (!hasAudio.some(Boolean) && !dubbing) throw new Error("所有片段都没有音轨，且未连接配音；无法合成有声成片");
+    const totalDuration = durations.reduce((sum, duration) => sum + duration, 0);
+
+    // 字幕：解析为 SRT 并写入工作区；确认当前 FFmpeg 支持 subtitles 滤镜。
+    let subtitlePath: string | undefined;
+    if (subtitle) {
+      const filters = await factory.availableFilters().catch(() => null as Record<string, unknown> | null);
+      const filterNames = Array.isArray(filters) ? filters.map(item => typeof item === "string" ? item : (item as { name?: string })?.name)
+        : filters ? Object.keys(filters) : [];
+      if (!filterNames.includes("subtitles")) {
+        throw new Error("当前 FFmpeg 不支持字幕滤镜（缺少 subtitles），请升级 FFmpeg 或去掉字幕后合成");
+      }
+      const srt = buildSrt(subtitle, totalDuration);
+      if (!srt) throw new Error("字幕文本无法解析为 SRT（检查时间戳格式或逐行台词）");
+      subtitlePath = `${directory}/sub.srt`;
+      await workspace.write(subtitlePath, srt);
+    }
 
     const command = factory();
     for (const clip of list) command.input(clip.url);
-    for (let index = 0; index < list.length; index += 1) {
-      if (!hasAudio[index]) command.input("anullsrc=r=44100:cl=stereo").inputOptions("-f", "lavfi");
+    const concatAudio = hasAudio.some(Boolean) ? 1 : 0;
+    let missingAudioCount = 0;
+    if (concatAudio) {
+      for (let index = 0; index < list.length; index += 1) {
+        if (!hasAudio[index]) command.input("anullsrc=r=44100:cl=stereo").inputOptions("-f", "lavfi");
+      }
+      missingAudioCount = hasAudio.filter(has => !has).length;
     }
+    if (dubbing) command.input(dubbing.url);
+    const dubbingIndex = dubbing ? list.length + missingAudioCount : -1;
 
     const chains: string[] = [];
     const labels: string[] = [];
-    let nullIndex = list.length;
+    let nullInput = list.length;
     for (let index = 0; index < list.length; index += 1) {
       chains.push(`[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,`
         + `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p[v${index}]`);
-      if (hasAudio[index]) {
-        chains.push(`[${index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a${index}]`);
+      if (concatAudio) {
+        if (hasAudio[index]) {
+          chains.push(`[${index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a${index}]`);
+        } else {
+          chains.push(`[${nullInput}:a]atrim=duration=${durations[index]!.toFixed(3)},asetpts=N/SR/TB[a${index}]`);
+          nullInput += 1;
+        }
+        labels.push(`[v${index}][a${index}]`);
       } else {
-        chains.push(`[${nullIndex}:a]atrim=duration=${durations[index]!.toFixed(3)},asetpts=N/SR/TB[a${index}]`);
-        nullIndex += 1;
+        labels.push(`[v${index}]`);
       }
-      labels.push(`[v${index}][a${index}]`);
     }
-    command.complexFilter([...chains, `${labels.join("")}concat=n=${list.length}:v=1:a=1[vout][aout]`]);
+    chains.push(`${labels.join("")}concat=n=${list.length}:v=1:a=${concatAudio}[vout]${concatAudio ? "[aout]" : ""}`);
+
+    let videoLabel = "[vout]";
+    if (subtitlePath) {
+      const fontSize = Math.max(14, Math.round(height / 27));
+      const style = `FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=1,Shadow=0,Bold=1,MarginV=${Math.round(height / 16)}`;
+      chains.push(`${videoLabel}subtitles=${subtitlePath}:force_style='${style}'[vsub]`);
+      videoLabel = "[vsub]";
+    }
+
+    let audioLabel = "";
+    if (dubbing) {
+      chains.push(`[${dubbingIndex}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[ax]`);
+      if (concatAudio && mode === "mix") {
+        chains.push(`[aout][ax]amix=inputs=2:duration=first[aout2]`);
+        audioLabel = "[aout2]";
+      } else if (concatAudio) {
+        audioLabel = "[ax]";
+      } else {
+        audioLabel = "[ax]";
+      }
+    } else if (concatAudio) {
+      audioLabel = "[aout]";
+    }
+    if (!audioLabel) throw new Error("无法确定成片音轨");
+
+    command.complexFilter(chains);
     command.output(outPath).videoCodec("libx264").audioCodec("aac").audioBitrate(192).format("mp4")
-      .outputOptions("-map", "[vout]", "-map", "[aout]", "-preset", "fast", "-crf", "18",
+      .outputOptions("-map", videoLabel, "-map", audioLabel, "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-ar", "44100", "-ac", "2");
     await runCommand(command, combined);
     combined.throwIfAborted();
@@ -235,7 +364,7 @@ async function compose(signal?: AbortSignal) {
 
 nodeTools.register({
   name: "composeVideo",
-  description: "把连接到本节点的视频片段按当前顺序拼接为一部成片并输出到节点",
+  description: "把连接到本节点的视频片段按当前顺序拼接为成片，并按配置混入配音音轨、烧录字幕，输出到节点",
   parameters: z.strictObject({}),
   async execute(_args, { signal }) {
     await compose(signal);
@@ -244,23 +373,28 @@ nodeTools.register({
 });
 
 nodeTools.register({
-  name: "setComposeOrder",
-  description: "调整成片拼接顺序；keys 为各片段的引用键，与节点 referenceOrder 相同，格式为 encodeURIComponent(JSON.stringify([来源节点ID, 来源端口ID]))，按目标顺序列出当前全部片段",
+  name: "setSubtitles",
+  description: "设置成片字幕文本；支持 SRT 格式（含时间戳）或逐行台词（按成片时长均匀分配）",
   parameters: z.strictObject({
-    keys: z.array(z.string().min(1).max(512)).min(1).max(200),
+    text: z.string().min(1).max(100000),
   }),
-  async execute({ keys }, { signal }) {
+  async execute({ text }, { signal }) {
     signal?.throwIfAborted();
-    const items = refList.value;
-    const byKey = new Map(items.map(item => [referenceKey(item), item]));
-    const reordered = keys.flatMap(key => {
-      const item = byKey.get(key);
-      return item ? [item] : [];
-    });
-    if (reordered.length !== items.length) throw new Error("keys 必须覆盖当前全部片段");
-    refList.value = reordered;
-    const names = new Map(clips.value.map(clip => [clip.key, clip.name]));
-    return { order: reordered.map((item, index) => ({ index: index + 1, name: names.get(referenceKey(item)) })) };
+    data.value.subtitleText = text;
+    return { length: text.length, preview: text.slice(0, 120) };
+  },
+});
+
+nodeTools.register({
+  name: "setComposeAudioMode",
+  description: "设置配音音轨的使用方式：replace 替换片段原声，mix 与片段原声混合",
+  parameters: z.strictObject({
+    mode: z.enum(["replace", "mix"]),
+  }),
+  async execute({ mode }, { signal }) {
+    signal?.throwIfAborted();
+    audioMode.value = mode;
+    return { mode };
   },
 });
 </script>
@@ -349,6 +483,24 @@ nodeTools.register({
           flex-shrink: 0;
           display: inline-flex;
         }
+      }
+    }
+
+    .optionRow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px;
+
+      .optionLabel {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--el-text-color-secondary);
+        font-size: 12px;
       }
     }
 
