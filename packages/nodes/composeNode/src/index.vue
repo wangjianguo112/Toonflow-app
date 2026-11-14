@@ -7,7 +7,7 @@
     :downloadName="outputFile?.url.split(/[\\/]/).at(-1)"
     :style="{ width: previewUrl && videoWidth ? `${videoWidth + 18}px` : undefined }"
     @fullscreen="player?.enterFullscreen()">
-    <div class="composeContent nopan">
+    <div class="videoContent nopan">
       <div v-if="exporting" class="exportLoading" role="status" aria-label="成片合成中">
         <el-progress type="circle" :percentage="exportProgress" :width="64" :strokeWidth="3" />
         <span>正在合成成片</span>
@@ -16,48 +16,63 @@
         v-else-if="previewUrl"
         ref="player"
         :src="previewUrl"
+        label="成片"
         @loadedmetadata="resizeVideo" />
-      <div v-else class="composeBody">
-        <div v-if="!clips.length" class="emptyHint">把视频片段节点连到本节点，即可按连线顺序拼接成片</div>
-        <ol v-else class="clipList" aria-label="拼接顺序">
-          <li v-for="(clip, index) in clips" :key="clip.key" class="clipItem">
-            <span class="clipIndex">{{ index + 1 }}</span>
-            <span class="clipName" :title="clip.name">{{ clip.name }}</span>
-            <span class="clipActions">
-              <el-button text :icon="IconArrowUp" :disabled="index === 0" aria-label="上移片段" title="上移" @click.stop="move(index, -1)" />
-              <el-button text :icon="IconArrowDown" :disabled="index === clips.length - 1" aria-label="下移片段" title="下移" @click.stop="move(index, 1)" />
-            </span>
-          </li>
-        </ol>
-        <div v-if="audioClip" class="optionRow" role="radiogroup" aria-label="配音方式">
-          <span class="optionLabel" :title="audioClip.name">配音 · {{ audioClip.name }}</span>
-          <el-radio-group v-model="audioMode" size="small">
-            <el-radio-button value="replace">替换原声</el-radio-button>
-            <el-radio-button value="mix">与原声混合</el-radio-button>
-          </el-radio-group>
-        </div>
-        <div v-if="subtitleText.trim()" class="optionRow">
-          <span class="optionLabel">字幕 · {{ subtitleSource }}（{{ subtitleText.length }} 字）</span>
-        </div>
-        <el-button
-          type="primary"
-          class="composeButton"
-          :icon="IconMovie"
-          :disabled="!clips.length"
-          @click.stop="compose()">合成成片</el-button>
+      <div v-else class="videoEmpty" role="img" aria-label="暂无成片">
+        <icon-movie :size="48" stroke="1.25" aria-hidden="true" />
       </div>
     </div>
+    <template #bottom>
+      <el-card class="promptCard" shadow="never" :bodyStyle="{ padding: '14px 16px 12px' }">
+        <referenceItem
+          v-if="refList.length"
+          v-model="refList"
+          @preview="setReferencePreview"
+          @remove="removeReference" />
+        <div v-if="!refList.length" class="referenceHint">把视频片段节点连到本节点，即可按连线顺序拼接成片</div>
+        <template v-if="audioRefList.length">
+          <referenceItem
+            v-model="audioRefList"
+            @preview="setAudioPreview"
+            @remove="removeAudioReference" />
+          <div class="referenceHint composeOption">
+            <span>配音音轨 · 替换或与片段原声混合</span>
+            <el-radio-group v-model="audioMode" size="small" aria-label="配音方式">
+              <el-radio-button value="replace">替换原声</el-radio-button>
+              <el-radio-button value="mix">与原声混合</el-radio-button>
+            </el-radio-group>
+          </div>
+        </template>
+        <template v-if="subtitleRefList.length">
+          <referenceItem
+            v-model="subtitleRefList"
+            @remove="removeSubtitleReference" />
+          <div class="referenceHint">字幕 · SRT 文本或逐行台词（逐行台词按成片时长均匀分配），合成时烧录进画面</div>
+        </template>
+        <div v-else-if="subtitleText" class="referenceHint">字幕 · 节点内文本（{{ subtitleText.length }} 字），合成时烧录进画面</div>
+        <div class="promptFooter">
+          <el-button
+            class="sendButton"
+            :icon="IconMovie"
+            :disabled="exporting || !clips.length"
+            title="合成成片"
+            aria-label="合成成片"
+            @click="compose().catch(() => {})" />
+        </div>
+      </el-card>
+    </template>
   </nodeSkeleton>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { useVueFlow } from "@vue-flow/core";
-import { IconVideo, IconMovie, IconArrowUp, IconArrowDown } from "@tabler/icons-vue";
-import { ElButton, ElMessage, ElProgress, ElRadioGroup, ElRadioButton } from "element-plus";
+import { IconVideo, IconMovie } from "@tabler/icons-vue";
+import { ElButton, ElCard, ElProgress, ElRadioGroup, ElRadioButton } from "element-plus";
 import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import type { BrowserFfmpegCommand, BrowserFfmpegFactory, FfprobeData } from "@toonflow/ffmpeg/browser";
 import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
+import referenceItem from "@toonflow/node-shared/referenceItem";
 import videoPlayer from "@toonflow/node-video/videoPlayer";
 
 defineOptions({
@@ -73,9 +88,9 @@ defineOptions({
 const { node, nodeProps, outputs, nodeEvent, files, ffmpeg, updateNodeInternals } = useNode({
   label: "成片",
 });
-const { refList } = useNodeReferences("in");
-const { refList: audioRefList } = useNodeReferences("audio");
-const { refList: subtitleRefList } = useNodeReferences("subtitle");
+const { refList, setReferencePreview, removeReference } = useNodeReferences("in");
+const { refList: audioRefList, setReferencePreview: setAudioPreview, removeReference: removeAudioReference } = useNodeReferences("audio");
+const { refList: subtitleRefList, removeReference: removeSubtitleReference } = useNodeReferences("subtitle");
 const { findNode } = useVueFlow();
 const player = ref<InstanceType<typeof videoPlayer>>();
 const videoWidth = ref(0);
@@ -100,12 +115,7 @@ const clips = computed<Clip[]>(() => refList.value.flatMap(item => {
 const audioClip = computed(() => {
   const item = audioRefList.value.find(entry => entry.dataType === "AUDIO" && entry.value);
   if (!item?.value || typeof item.value === "string") return undefined;
-  const label = findNode(item.source)?.data?.label;
-  return {
-    name: (typeof label === "string" && label.trim()) || item.value.url.split(/[\\/]/).at(-1) || "配音",
-    url: item.value.url,
-    mimeType: item.value.mimeType,
-  };
+  return { url: item.value.url, mimeType: item.value.mimeType };
 });
 
 const subtitleText = computed(() => {
@@ -114,10 +124,6 @@ const subtitleText = computed(() => {
     .map(item => item.value as string).join("\n\n").trim();
   if (fromInputs) return fromInputs;
   return typeof data.value.subtitleText === "string" ? data.value.subtitleText.trim() : "";
-});
-const subtitleSource = computed(() => {
-  if (subtitleRefList.value.some(item => item.dataType === "STRING" && typeof item.value === "string" && item.value.trim())) return "连线文本";
-  return "节点内文本";
 });
 
 const outputFile = computed(() => outputs.value.video?.dataType === "VIDEO" ? outputs.value.video.value : undefined);
@@ -136,14 +142,6 @@ nodeEvent.on("delete", () => {
 
 function referenceKey(item: { source: string; sourceHandle: string }) {
   return encodeURIComponent(JSON.stringify([item.source, item.sourceHandle]));
-}
-
-function move(index: number, offset: number) {
-  const list = [...refList.value];
-  const target = index + offset;
-  if (target < 0 || target >= list.length) return;
-  [list[index], list[target]] = [list[target]!, list[index]!];
-  refList.value = list;
 }
 
 function showError(error: unknown, fallback: string) {
@@ -334,8 +332,6 @@ async function compose(signal?: AbortSignal) {
       if (concatAudio && mode === "mix") {
         chains.push(`[aout][ax]amix=inputs=2:duration=first[aout2]`);
         audioLabel = "[aout2]";
-      } else if (concatAudio) {
-        audioLabel = "[ax]";
       } else {
         audioLabel = "[ax]";
       }
@@ -400,7 +396,7 @@ nodeTools.register({
 </script>
 
 <style scoped lang="scss">
-.composeContent {
+.videoContent {
   .nodeSkeleton.resized & {
     height: 100%;
     min-height: 0;
@@ -426,86 +422,53 @@ nodeTools.register({
     color: var(--el-text-color-secondary);
   }
 
-  .composeBody {
+  .videoEmpty {
+    display: grid;
+    place-items: center;
+    min-height: 144px;
+    color: var(--el-text-color-placeholder);
+  }
+}
+
+.promptCard {
+  .referenceHint {
+    margin: 8px 0;
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+
+  .composeOption {
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-    width: 100%;
-    padding: 12px;
-    box-sizing: border-box;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 
-    .emptyHint {
-      padding: 8px 4px;
-      color: var(--el-text-color-secondary);
-      font-size: 12px;
-      line-height: 1.6;
-      text-align: center;
-    }
+  .promptFooter {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
 
-    .clipList {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      max-height: 220px;
-      margin: 0;
-      padding: 0;
-      overflow-y: auto;
-      list-style: none;
-
-      .clipItem {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-width: 0;
-        padding: 4px 6px;
-        border-radius: var(--el-border-radius-base);
-        background: var(--el-fill-color-light);
-
-        .clipIndex {
-          flex-shrink: 0;
-          min-width: 18px;
-          color: var(--el-text-color-secondary);
-          font-size: 12px;
-          text-align: center;
-        }
-
-        .clipName {
-          flex: 1;
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          font-size: 12px;
-        }
-
-        .clipActions {
-          flex-shrink: 0;
-          display: inline-flex;
-        }
-      }
-    }
-
-    .optionRow {
+    .generationActions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 6px;
-
-      .optionLabel {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        color: var(--el-text-color-secondary);
-        font-size: 12px;
-      }
+      gap: 8px;
+      margin-left: auto;
     }
 
-    .composeButton {
-      width: 100%;
+    .sendButton {
+      width: 32px;
+      height: 32px;
+      margin-left: auto;
+      padding: 0;
+      --el-button-bg-color: var(--el-text-color-primary);
+      --el-button-border-color: transparent;
+      --el-button-text-color: var(--el-bg-color);
+      --el-button-hover-bg-color: var(--el-text-color-regular);
+      --el-button-hover-border-color: transparent;
+      --el-button-hover-text-color: var(--el-bg-color);
     }
   }
 }
