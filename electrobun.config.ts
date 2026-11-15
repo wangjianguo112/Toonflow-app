@@ -1,6 +1,5 @@
 import type { ElectrobunConfig } from "./.hutch/devkit/api/config/ElectrobunConfig";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const startupTarget = process.platform === "darwin" ? (process.arch === "x64" ? "macX64" : "macArm64")
@@ -54,7 +53,8 @@ export default {
       "packages/providers/src": "providers",
       "packages/skills": "skills",
       // ACT: 发布前 release.ts 会把 FFmpeg 二进制下载到 build/ffmpeg-bundled；存在则随包内置，首次启动免下载。
-      ...(existsSync(resolve("build/ffmpeg-bundled")) ? {
+      //      判断相对本 config 文件（项目根），与 cwd 无关。
+      ...(existsSync(fileURLToPath(new URL("./build/ffmpeg-bundled", import.meta.url))) ? {
         "build/ffmpeg-bundled": "ffmpeg-bundled",
       } : {}),
       ...(startupTarget ? {
