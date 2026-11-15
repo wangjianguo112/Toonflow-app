@@ -27,13 +27,6 @@ export type Locale = "zh-CN" | "zh-TW" | "en" | "ja" | "ru" | "vi" | "th" | "ko"
 export interface MessageDescriptor { id: string; values?: Record<string, unknown> }
 export const supportedLocales: { code: Locale; name: string }[] = [
   { code: "zh-CN", name: "简体中文" }, { code: "zh-TW", name: "繁體中文" },
-  { code: "en", name: "English" }, { code: "ja", name: "日本語" },
-  { code: "ru", name: "Русский" }, { code: "vi", name: "Tiếng Việt" },
-  { code: "th", name: "ไทย" }, { code: "ko", name: "한국어" }, { code: "hi", name: "हिन्दी" },
-  { code: "id", name: "Bahasa Indonesia" }, { code: "ms", name: "Bahasa Melayu" }, { code: "fil", name: "Filipino" },
-  { code: "bn", name: "বাংলা" }, { code: "ur", name: "اردو" }, { code: "ta", name: "தமிழ்" },
-  { code: "te", name: "తెలుగు" }, { code: "mr", name: "मराठी" }, { code: "pa", name: "ਪੰਜਾਬੀ" },
-  { code: "ar", name: "العربية" }, { code: "fa", name: "فارسی" }, { code: "tr", name: "Türkçe" },
 ];
 const catalogs: Record<string, Record<string, string>> = { "zh-TW": zhTw, en, ja, ru, vi, th, ko, hi, id, ms, fil, bn, ur, ta, te, mr, pa, ar, fa, tr };
 let activeLocale: Locale = "zh-CN";
@@ -62,13 +55,16 @@ export function detectLocale(languages: readonly string[]): Locale {
     const locale = normalizeLocale(language);
     if (locale) return locale;
   }
-  return "en";
+  // ACT: 二改版本仅保留中文；系统语言不匹配时默认简体中文。
+  return "zh-CN";
 }
 
 export function isRtlLocale(locale: Locale): boolean { return ["ar", "fa", "ur"].includes(locale); }
 
 export function getLocale(): Locale { return activeLocale; }
 export function setLocale(locale: Locale) {
+  // ACT: 二改版本仅内置中文；历史设置里保存的其他语言归一到简体中文。
+  if (!supportedLocales.some(item => item.code === locale)) locale = "zh-CN";
   if (locale === activeLocale) return;
   activeLocale = locale;
   for (const listener of listeners) listener(locale);
