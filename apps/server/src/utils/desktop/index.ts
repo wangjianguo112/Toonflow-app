@@ -6,9 +6,10 @@ import type { DesktopRuntime, desktopUpdateAttempt, updateSnapshot } from "@/typ
 import { msg, translateError, translateMessage } from "@/lib/i18n";
 import { messageError } from "@toonflow/i18n/errors";
 
+// ACT: 二改版更新只走本项目仓库；官方源会导致二改版被官方发行版覆盖，故不保留。
 const updateBaseUrls = {
-  official: "https://api.toonflow.net/web/version/desktopUpdates",
-  github: "https://github.com/HBAI-Ltd/Toonflow-app/releases/latest/download",
+  official: "https://github.com/wangjianguo112/Toonflow-app/releases/latest/download",
+  github: "https://github.com/wangjianguo112/Toonflow-app/releases/latest/download",
 };
 const updateRuntimeId = crypto.randomUUID();
 let cancelledUpdateAttempt: string | undefined;
@@ -61,7 +62,7 @@ function getInstallFailure(local: Awaited<ReturnType<DesktopRuntime["updater"]["
     currentVersion: local.version,
     currentHash: local.hash,
     message: translateMessage(message),
-    downloadUrl: "https://github.com/HBAI-Ltd/Toonflow-app/releases/latest",
+    downloadUrl: "https://github.com/wangjianguo112/Toonflow-app/releases/latest",
   };
 }
 
